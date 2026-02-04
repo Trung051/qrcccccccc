@@ -2,105 +2,75 @@ import streamlit as st
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, WebRtcMode
 import av
 import cv2
-from typing import List, Tuple
+from typing import List
 
-# Optional pyzbar (disabled on cloud)
-try:
-    from pyzbar.pyzbar import decode as pyzbar_decode  # type: ignore
-except Exception:
-    pyzbar_decode = None
+st.set_page_config(page_title="Ultra QR Scanner", layout="wide")
 
-st.set_page_config(page_title="QR Scanner", layout="wide")
-
-# ---------------- Session State ----------------
+# ---------------- Session ----------------
 if "codes" not in st.session_state:
     st.session_state.codes: List[str] = []
-if "duplicate_msg" not in st.session_state:
-    st.session_state.duplicate_msg = ""
+if "dup" not in st.session_state:
+    st.session_state.dup = ""
 
-st.title("🛠️ QR Scanner – siêu nhạy")
+st.title("🚀 Ultra QR Scanner (WeChatDetector)")
 
-st.caption("Camera quét liên tục. Thử giữ QR cách camera 10-20 cm, đủ sáng để nhận nhanh.")
+# ---------------- WeChat QR Detector ----------------
+try:
+    wechat_detector = cv2.wechat_qrcode_WeChatQRCode.create()
+except Exception:
+    wechat_detector = None
+    st.warning("WeChat QR detector unavailable (opencv-contrib missing). Falling back to QRCodeDetector.")
 
-# ---------------- Helper ----------------
-def preprocess(img) -> Tuple[cv2.Mat, cv2.Mat]:
-    """Return (gray, sharpened) for detection."""
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    blur = cv2.GaussianBlur(gray, (3, 3), 0)
-    sharpen = cv2.addWeighted(gray, 1.5, blur, -0.5, 0)
-    return gray, sharpen
-
+basic_detector = cv2.QRCodeDetector()
 
 # ---------------- Video Processor ----------------
-class QRVideoProcessor(VideoProcessorBase):
-    def __init__(self):
-        self.detector = cv2.QRCodeDetector()
+class UltraProcessor(VideoProcessorBase):
+    def _detect_wechat(self, img):
+        if not wechat_detector:
+            return []
+        res, _ = wechat_detector.detectAndDecode(img)
+        return [t for t in res if t]
 
-    def _detect(self, im):
+    def _detect_basic(self, img):
         found = []
-        ok, infos, points, _ = self.detector.detectAndDecodeMulti(im)
+        ok, infos, _, _ = basic_detector.detectAndDecodeMulti(img)
         if ok:
-            found.extend([t for t in infos if t])
-            return found, points
-        data, pts, _ = self.detector.detectAndDecode(im)
-        if data:
-            found.append(data)
-            points = [pts] if pts is not None else None
-            return found, points
-        return found, None
+            found += [t for t in infos if t]
+        else:
+            data, _, _ = basic_detector.detectAndDecode(img)
+            if data:
+                found.append(data)
+        return found
 
-    def recv(self, frame: av.VideoFrame):
+    def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
-        gray, sharp = preprocess(img)
-
-        codes, pts = self._detect(sharp)
-
-        # pyzbar fallback if available & nothing found
-        if not codes and pyzbar_decode:
-            codes = [o.data.decode("utf-8") for o in pyzbar_decode(img)]
-
-        # Draw polygons if detected
-        if pts is not None:
-            for p in pts:
-                if p is not None:
-                    p = p.reshape(-1, 2).astype(int)
-                    cv2.polylines(img, [p], True, (0, 255, 0), 2)
+        codes = self._detect_wechat(img)
+        if not codes:
+            codes = self._detect_basic(img)
 
         for code in codes:
             if code not in st.session_state.codes:
                 st.session_state.codes.append(code)
-                st.session_state.duplicate_msg = ""
+                st.session_state.dup = ""
             else:
-                st.session_state.duplicate_msg = f"⚠️ Mã trùng: {code}"
-
+                st.session_state.dup = f"⚠️ Dup: {code}"
         return av.VideoFrame.from_ndarray(img, format="bgr24")
-
 
 # ---------------- WebRTC ----------------
 webrtc_streamer(
-    key="qr-scanner",
+    key="ultra",
     mode=WebRtcMode.SENDRECV,
-    video_processor_factory=QRVideoProcessor,
+    video_processor_factory=UltraProcessor,
     media_stream_constraints={
         "video": {"facingMode": {"ideal": "environment"}, "width": 1920, "height": 1080},
         "audio": False,
     },
-    async_processing=True,
 )
 
 # ---------------- UI ----------------
-if st.session_state.duplicate_msg:
-    st.warning(st.session_state.duplicate_msg)
+if st.session_state.dup:
+    st.warning(st.session_state.dup)
 
-st.subheader("Danh sách mã đã quét")
-with st.container():
-    for idx, code in enumerate(reversed(st.session_state.codes), 1):
-        st.write(f"{len(st.session_state.codes) - idx + 1}. {code}")
-
-left, right = st.columns(2)
-with left:
-    if st.button("🔄 Làm mới danh sách"):
-        st.session_state.codes.clear()
-        st.session_state.duplicate_msg = ""
-with right:
-    st.write(f"Tổng: {len(st.session_state.codes)} mã")
+st.subheader("Codes")
+for idx, c in enumerate(reversed(st.session_state.codes), 1):
+    st.write(f"{len(st.session_state.codes)-idx+1}. {c}")
