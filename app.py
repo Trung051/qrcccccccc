@@ -2,57 +2,71 @@ import streamlit as st
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, WebRtcMode
 import av
 import cv2
-from typing import List
+from typing import List, Tuple
 
-# Try import pyzbar for better barcode support (optional)
-pyzbar_decode = None  # disabled on Streamlit Cloud (no zbar)
+# Optional pyzbar (disabled on cloud)
+try:
+    from pyzbar.pyzbar import decode as pyzbar_decode  # type: ignore
+except Exception:
+    pyzbar_decode = None
 
 st.set_page_config(page_title="QR Scanner", layout="wide")
 
-# ---------- Session State ----------
+# ---------------- Session State ----------------
 if "codes" not in st.session_state:
-    st.session_state.codes: List[str] = []  # preserve order
+    st.session_state.codes: List[str] = []
 if "duplicate_msg" not in st.session_state:
     st.session_state.duplicate_msg = ""
 
-st.title("📦 Quét mã QR / Barcode liên tục")
+st.title("🛠️ QR Scanner – siêu nhạy")
 
-st.caption(
-    "Camera sẽ liên tục quét. Mã mới hiển thị dưới khung camera. Nếu mã đã quét, sẽ báo trùng."  # noqa: E501
-)
+st.caption("Camera quét liên tục. Thử giữ QR cách camera 10-20 cm, đủ sáng để nhận nhanh.")
 
-# ---------- Video Processor ----------
+# ---------------- Helper ----------------
+def preprocess(img) -> Tuple[cv2.Mat, cv2.Mat]:
+    """Return (gray, sharpened) for detection."""
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    blur = cv2.GaussianBlur(gray, (3, 3), 0)
+    sharpen = cv2.addWeighted(gray, 1.5, blur, -0.5, 0)
+    return gray, sharpen
+
+
+# ---------------- Video Processor ----------------
 class QRVideoProcessor(VideoProcessorBase):
-    """Detect QR & barcodes continuously, no blocking."""
-
     def __init__(self):
         self.detector = cv2.QRCodeDetector()
 
-    def _detect_opencv(self, img):
-        # Try multi-QR first
+    def _detect(self, im):
         found = []
-        retval, decoded_info, _, _ = self.detector.detectAndDecodeMulti(img)
-        if retval:
-            found.extend([txt for txt in decoded_info if txt])
-        else:
-            # Fallback single
-            data, _, _ = self.detector.detectAndDecode(img)
-            if data:
-                found.append(data)
-        return found
-
-    def _detect_pyzbar(self, img):
-        if not pyzbar_decode:
-            return []
-        return [obj.data.decode("utf-8") for obj in pyzbar_decode(img)]
+        ok, infos, points, _ = self.detector.detectAndDecodeMulti(im)
+        if ok:
+            found.extend([t for t in infos if t])
+            return found, points
+        data, pts, _ = self.detector.detectAndDecode(im)
+        if data:
+            found.append(data)
+            points = [pts] if pts is not None else None
+            return found, points
+        return found, None
 
     def recv(self, frame: av.VideoFrame):
         img = frame.to_ndarray(format="bgr24")
+        gray, sharp = preprocess(img)
 
-        found_codes = self._detect_opencv(img)
-        
+        codes, pts = self._detect(sharp)
 
-        for code in found_codes:
+        # pyzbar fallback if available & nothing found
+        if not codes and pyzbar_decode:
+            codes = [o.data.decode("utf-8") for o in pyzbar_decode(img)]
+
+        # Draw polygons if detected
+        if pts is not None:
+            for p in pts:
+                if p is not None:
+                    p = p.reshape(-1, 2).astype(int)
+                    cv2.polylines(img, [p], True, (0, 255, 0), 2)
+
+        for code in codes:
             if code not in st.session_state.codes:
                 st.session_state.codes.append(code)
                 st.session_state.duplicate_msg = ""
@@ -61,30 +75,25 @@ class QRVideoProcessor(VideoProcessorBase):
 
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
-# ---------- WebRTC Stream ----------
+
+# ---------------- WebRTC ----------------
 webrtc_streamer(
     key="qr-scanner",
     mode=WebRtcMode.SENDRECV,
     video_processor_factory=QRVideoProcessor,
     media_stream_constraints={
-        "video": {
-            "facingMode": {"ideal": "environment"},
-            "width": 1280,
-            "height": 720,
-        },
+        "video": {"facingMode": {"ideal": "environment"}, "width": 1920, "height": 1080},
         "audio": False,
     },
     async_processing=True,
 )
 
-# ---------- UI ----------
+# ---------------- UI ----------------
 if st.session_state.duplicate_msg:
     st.warning(st.session_state.duplicate_msg)
 
 st.subheader("Danh sách mã đã quét")
-
 with st.container():
-    # show newest first
     for idx, code in enumerate(reversed(st.session_state.codes), 1):
         st.write(f"{len(st.session_state.codes) - idx + 1}. {code}")
 
