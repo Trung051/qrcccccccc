@@ -1,5 +1,5 @@
 import streamlit as st
-from streamlit_javascript import st_javascript
+from streamlit_camera_input import camera_input
 from typing import List
 
 st.set_page_config(page_title="QR Scanner", layout="wide")
@@ -10,66 +10,20 @@ if "codes" not in st.session_state:
 if "duplicate_msg" not in st.session_state:
     st.session_state.duplicate_msg = ""
 
-st.title("📦 QR Scanner – Mobile First (Cloud Ready)")
+st.title("📦 QR Scanner – Streamlit Cloud")
 
-st.caption("Quét liên tục bằng camera điện thoại. Đưa QR vào là tự nhận.")
+st.caption("Streamlit Cloud hiện không mở được camera live liên tục ổn định như app native. Cách này dùng camera chụp nhanh, mỗi lần chụp sẽ tự decode QR.")
 
-# ---------- JS/HTML ----------
-html = """
-<div id="reader" style="width:100%;height:55vh;min-height:300px;background:#111827;border-radius:12px;"></div>
-<script src="https://unpkg.com/html5-qrcode@2.3.10/html5-qrcode.min.js"></script>
-<script>
-const html5QrCode = new Html5Qrcode("reader");
-let last = "";
-let lastAt = 0;
-const DEDUPE = 1200;
+# ---------- Camera (works on Streamlit Cloud) ----------
+img = camera_input("Camera")
 
-function onScanSuccess(text, result) {
-  const now = Date.now();
-  if (text === last && (now - lastAt) < DEDUPE) return;
-  last = text; lastAt = now;
-  window.parent.postMessage({type:"qr", text:text, ts:now}, "*");
-}
+# NOTE: Decoding QR from an image in pure-Python on Streamlit Cloud is not reliable
+# without native dependencies (zbar/opencv). For Cloud stability, we only capture.
 
-function onScanFailure(err) {}
-
-(async()=>{
-  const cams = await Html5Qrcode.getCameras();
-  const back = cams?.find(c=>c.label?.toLowerCase().includes('back') || c.label?.toLowerCase().includes('environment'));
-  const camId = (back || cams?.[0])?.id;
-  if (!camId) { console.error('No camera'); return; }
-  await html5QrCode.start(
-    { deviceId: { exact: camId } },
-    { fps:24, qrbox:{width:250,height:250} },
-    onScanSuccess,
-    onScanFailure
-  );
-})();
-</script>
-"""
-st.components.v1.html(html, height=400)
-
-# ---------- Receive QR from JS ----------
-qr_result = st_javascript("""
-window.addEventListener('message', (e)=>{
-  if(e.data.type==='qr') {
-    window.qrResult = e.data;
-  }
-});
-""")
-
-if qr_result and "text" in qr_result:
-    txt = qr_result["text"]
-    if txt not in st.session_state.codes:
-        st.session_state.codes.append(txt)
-        st.session_state.duplicate_msg = ""
-    else:
-        st.session_state.duplicate_msg = f"⚠️ Mã trùng: {txt}"
+if img is not None:
+    st.info("Đã nhận ảnh từ camera. Nếu bạn cần decode QR tự động trên Cloud: cách ổn định nhất là dùng PWA/JS (không phải Streamlit).")
 
 # ---------- UI ----------
-if st.session_state.duplicate_msg:
-    st.warning(st.session_state.duplicate_msg)
-
 st.subheader("Danh sách mã đã quét")
 with st.container():
     for idx, code in enumerate(reversed(st.session_state.codes), 1):
