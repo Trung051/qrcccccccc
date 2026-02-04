@@ -2,7 +2,6 @@ import streamlit as st
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, WebRtcMode
 import av
 import cv2
-from pyzbar.pyzbar import decode as decode_barcode
 
 st.set_page_config(page_title="QR Scanner", layout="wide")
 
@@ -17,7 +16,7 @@ st.title("📦 Quét mã QR liên tục")
 st.caption("Camera sẽ liên tục quét. Mã mới sẽ hiển thị dưới khung camera. Nếu mã đã quét, sẽ báo trùng.")
 
 class QRVideoProcessor(VideoProcessorBase):
-    """Continuously process video frames to detect QR/Bar codes."""
+    """Continuously process video frames to detect QR codes (opencv only)."""
 
     def __init__(self):
         self.detector = cv2.QRCodeDetector()
@@ -25,16 +24,10 @@ class QRVideoProcessor(VideoProcessorBase):
     def recv(self, frame: av.VideoFrame):
         img = frame.to_ndarray(format="bgr24")
 
-        # Attempt using QRCodeDetector first     
-        data, bbox, _ = self.detector.detectAndDecode(img)
         found_codes = []
+        data, bbox, _ = self.detector.detectAndDecode(img)
         if data:
             found_codes.append(data)
-        else:
-            # fallback to pyzbar for other symbologies
-            decoded = decode_barcode(img)
-            for obj in decoded:
-                found_codes.append(obj.data.decode("utf-8"))
 
         for code in found_codes:
             if code not in st.session_state.codes:
