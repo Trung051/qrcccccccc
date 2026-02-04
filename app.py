@@ -2,32 +2,59 @@ import streamlit as st
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, WebRtcMode
 import av
 import cv2
+from typing import List
+
+# Try import pyzbar for better barcode support (optional)
+try:
+    from pyzbar.pyzbar import decode as pyzbar_decode
+except ImportError:
+    pyzbar_decode = None
 
 st.set_page_config(page_title="QR Scanner", layout="wide")
 
-# Initialize session state
+# ---------- Session State ----------
 if "codes" not in st.session_state:
-    st.session_state.codes = []  # list to preserve order
+    st.session_state.codes: List[str] = []  # preserve order
 if "duplicate_msg" not in st.session_state:
     st.session_state.duplicate_msg = ""
 
-st.title("📦 Quét mã QR liên tục")
+st.title("📦 Quét mã QR / Barcode liên tục")
 
-st.caption("Camera sẽ liên tục quét. Mã mới sẽ hiển thị dưới khung camera. Nếu mã đã quét, sẽ báo trùng.")
+st.caption(
+    "Camera sẽ liên tục quét. Mã mới hiển thị dưới khung camera. Nếu mã đã quét, sẽ báo trùng."  # noqa: E501
+)
 
+# ---------- Video Processor ----------
 class QRVideoProcessor(VideoProcessorBase):
-    """Continuously process video frames to detect QR codes (opencv only)."""
+    """Detect QR & barcodes continuously, no blocking."""
 
     def __init__(self):
         self.detector = cv2.QRCodeDetector()
 
+    def _detect_opencv(self, img):
+        # Try multi-QR first
+        found = []
+        retval, decoded_info, _, _ = self.detector.detectAndDecodeMulti(img)
+        if retval:
+            found.extend([txt for txt in decoded_info if txt])
+        else:
+            # Fallback single
+            data, _, _ = self.detector.detectAndDecode(img)
+            if data:
+                found.append(data)
+        return found
+
+    def _detect_pyzbar(self, img):
+        if not pyzbar_decode:
+            return []
+        return [obj.data.decode("utf-8") for obj in pyzbar_decode(img)]
+
     def recv(self, frame: av.VideoFrame):
         img = frame.to_ndarray(format="bgr24")
 
-        found_codes = []
-        data, bbox, _ = self.detector.detectAndDecode(img)
-        if data:
-            found_codes.append(data)
+        found_codes = self._detect_opencv(img)
+        if not found_codes:
+            found_codes = self._detect_pyzbar(img)
 
         for code in found_codes:
             if code not in st.session_state.codes:
@@ -38,35 +65,37 @@ class QRVideoProcessor(VideoProcessorBase):
 
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
-# Start WebRTC streamer
-webrtc_ctx = webrtc_streamer(
+# ---------- WebRTC Stream ----------
+webrtc_streamer(
     key="qr-scanner",
     mode=WebRtcMode.SENDRECV,
     video_processor_factory=QRVideoProcessor,
     media_stream_constraints={
         "video": {
-            "facingMode": {"ideal": "environment"}  # use back camera on mobile
+            "facingMode": {"ideal": "environment"},
+            "width": 1280,
+            "height": 720,
         },
         "audio": False,
     },
     async_processing=True,
 )
 
-# Display duplicate message if any
+# ---------- UI ----------
 if st.session_state.duplicate_msg:
     st.warning(st.session_state.duplicate_msg)
 
 st.subheader("Danh sách mã đã quét")
 
-# Show as a scrollable container
 with st.container():
+    # show newest first
     for idx, code in enumerate(reversed(st.session_state.codes), 1):
-        st.write(f"{len(st.session_state.codes)-idx+1}. {code}")
+        st.write(f"{len(st.session_state.codes) - idx + 1}. {code}")
 
-col1, col2 = st.columns(2)
-with col1:
+left, right = st.columns(2)
+with left:
     if st.button("🔄 Làm mới danh sách"):
         st.session_state.codes.clear()
         st.session_state.duplicate_msg = ""
-with col2:
+with right:
     st.write(f"Tổng: {len(st.session_state.codes)} mã")
