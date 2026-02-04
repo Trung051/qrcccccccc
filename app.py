@@ -5,10 +5,7 @@ import cv2
 from typing import List
 
 # Try import pyzbar for better barcode support (optional)
-try:
-    from pyzbar.pyzbar import decode as pyzbar_decode
-except ImportError:
-    pyzbar_decode = None
+pyzbar_decode = None  # disabled on Streamlit Cloud (no zbar)
 
 st.set_page_config(page_title="QR Scanner", layout="wide")
 
@@ -53,8 +50,7 @@ class QRVideoProcessor(VideoProcessorBase):
         img = frame.to_ndarray(format="bgr24")
 
         found_codes = self._detect_opencv(img)
-        if not found_codes:
-            found_codes = self._detect_pyzbar(img)
+        
 
         for code in found_codes:
             if code not in st.session_state.codes:
